@@ -24,10 +24,10 @@ class VQVAE(nn.Module):
         else:
             self.img_to_embedding_map = None
 
-    def forward(self, x=None, verbose=False,latent_only=False, min_encoding_indices=None):
+    def forward(self, x=None, verbose=False,latent_only=False, vec_only=False, min_encoding_indices=None):
         # latent_only: flagged if training PixelCNN and need 
         # to save the latent space representations 
-
+        
         # min_encoding_indices: provided if want to decode samples sampled from 
         # trained PixelCNN
         
@@ -35,7 +35,10 @@ class VQVAE(nn.Module):
             assert x is not None
             z_e = self.encoder(x)
 
+            # if vec_only:
+                # return z_e 
             z_e = self.pre_quantization_conv(z_e)
+
             embedding_loss, z_q, perplexity, _, indices = self.vector_quantization(z_e)
 
             if latent_only:
@@ -43,7 +46,10 @@ class VQVAE(nn.Module):
         else:
             z_q = self.vector_quantization(min_encoding_indices=min_encoding_indices)
             embedding_loss, perplexity = 0,0
-        
+
+        if vec_only:
+            return z_q
+            
         x_hat = self.decoder(z_q)
 
         if verbose and min_encoding_indices is None:

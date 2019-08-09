@@ -1,3 +1,4 @@
+
 import torch
 import torch.nn as nn
 from torchvision import datasets, transforms
@@ -30,10 +31,10 @@ parser.add_argument("--n_hiddens", type=int, default=128)
 parser.add_argument("--conditional", default=True)
 parser.add_argument("--batch_size", type=int, default=32)
 parser.add_argument("--epochs", type=int, default=100)
-parser.add_argument("--log_interval", type=int, default=500)
-parser.add_argument("--sample_interval", type=int, default=2000)
+parser.add_argument("--log_interval", type=int, default=1000)
+parser.add_argument("--sample_interval", type=int, default=1000)
 parser.add_argument("--img_dim", type=int, default=16)
-parser.add_argument("--input_dim", type=int, default=1,
+parser.add_argument("--input_dim", type=int, default=64,
     help='1 for grayscale 3 for rgb')
 parser.add_argument("--n_embeddings", type=int, default=512,
     help='number of embeddings from VQ VAE')
@@ -48,11 +49,13 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 configure('./results/var_log', flush_secs=5)
 img_dim=args.img_dim
 data = np.load("./data/bco_xlatents.npy")
-contexts = np.load("./data/bco1_clatents.npy")
+contexts = np.load("./data/bco_clatents.npy")
 sample_c_imgs = np.load("./data/bco_tstcon_40.npy")
 sample_c_imgs = get_torch_images_from_numpy(sample_c_imgs, True, one_image=True)
-contexts=contexts.reshape(1500*100,64,16,16)
-data=data.reshape(-1,256)[:1500*100]
+
+val_split= 10*30
+data,valx = data[val_split:].reshape(-1,256),data[:val_split].reshape(-1,256)
+contexts,valc = contexts[val_split:].reshape(-1,256),contexts[:val_split].reshape(-1,256)
 model = GatedPixelCNN(args.n_embeddings, args.img_dim**2, args.n_layers, args.conditional).to(device)
 model.train()
 criterion = nn.CrossEntropyLoss().cuda()
@@ -66,7 +69,6 @@ if args.loadpth_vq is not '':
     vae.eval()
     sample_c=vae(sample_c_imgs,latent_only=True).detach().cpu().numpy().squeeze().reshape(40,-1)
 
-# 
 if args.loadpth_pcnn is not '':
     model.load_state_dict(torch.load(args.loadpth_pcnn))
     print("PCNN Loaded")
@@ -74,7 +76,9 @@ if args.loadpth_pcnn is not '':
 n_trajs = len(data)
 n_batch = int(n_trajs / args.batch_size)
 
-# 
+n_trajs_t = len(valx)
+n_batch_t = int(n_trajs_t / args.batch_size)
+
 """
 train, test, and log
 """
@@ -87,8 +91,7 @@ def train(epoch):
 
         idx = np.random.choice(n_trajs, size=args.batch_size)
         x = from_numpy_to_var(data[idx].reshape(args.batch_size,img_dim,img_dim),dtype='long').long().cuda()
-        c = from_numpy_to_var(contexts[idx].reshape(args.batch_size,args.embedding_dim,img_dim,img_dim)).cuda()
-        
+        c = from_numpy_to_var(contexts[idx].reshape(args.batch_size,img_dim,img_dim),dtype='long').long().cuda()
         labels = torch.zeros(args.batch_size).long().cuda()
         # Train PixelCNN with images
         logits = model(x, labels,c=c)
@@ -138,18 +141,18 @@ def test(epoch):
 def generate_samples(epoch):
     n_samples=32
     labels = torch.zeros(n_samples).long().cuda()
-    # idx = np.random.choice(sample_c.shape[0], size=1)
-    # con = from_numpy_to_var(sample_c[idx].repeat(n_samples,1).reshape(n_samples,img_dim,img_dim),dtype='long').long().cuda()
+    idx = np.random.choice(sample_c.shape[0], size=1)
+    con = from_numpy_to_var(sample_c[idx].repeat(n_samples,1).reshape(n_samples,img_dim,img_dim),dtype='long').long().cuda()
     
-    # x_tilde = model.generate(labels, c=con, shape=(img_dim,img_dim), batch_size=n_samples)
+    x_tilde = model.generate(labels, c=con, shape=(img_dim,img_dim), batch_size=n_samples)
 
-    # if args.loadpth_vq is not '':
-    #     _, x_hat, _ = vae(min_encoding_indices=x_tilde)
-    #     save_image(x_hat,'./results/%s_testsamples_%d.png'%(args.prefix,epoch),nrow=10)
-    #     save_image(sample_c_imgs[idx],'./results/%s_c_%d.png'%(args.prefix,epoch))
+    if args.loadpth_vq is not '':
+        _, x_hat, _ = vae(min_encoding_indices=x_tilde)
+        save_image(x_hat,'./results/%s_testsamples_%d.png'%(args.prefix,epoch),nrow=10)
+        save_image(sample_c_imgs[idx],'./results/%s_c_%d.png'%(args.prefix,epoch))
     
-    idx = np.random.choice(n_trajs, size=n_samples)
-    c = from_numpy_to_var(contexts[idx].reshape(n_samples,args.embedding_dim,img_dim,img_dim)).cuda()
+    idx = np.random.choice(n_trajs, size=1)
+    c = from_numpy_to_var(contexts[idx].repeat(n_samples).reshape(n_samples,img_dim,img_dim),dtype='long').long().cuda()
     x_tilde = model.generate(labels, c=c, shape=(img_dim,img_dim), batch_size=n_samples)
 
     if args.loadpth_vq is not '':
