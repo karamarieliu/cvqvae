@@ -47,19 +47,13 @@ args = parser.parse_args()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 configure('./results/var_log', flush_secs=5)
 img_dim=args.img_dim
-data = np.load("./data/bco_xlatents.npy")[:3]
-contexts = np.load("./data/bco_clatents.npy")[:3]
-# data1 = np.load(data_dir+"/bcov5_0.npy")
-# data2 = np.load(data_dir+"/bcov5_1.npy")
-# data3 = np.load(data_dir+"/bcov5_2.npy")
-# contexts = np.concatenate((data1,data2,data3),axis=0)
+data = np.load("./data/bco_xlatents.npy")
+contexts = np.load("./data/bco1_clatents.npy")
 sample_c_imgs = np.load("./data/bco_tstcon_40.npy")
 sample_c_imgs = get_torch_images_from_numpy(sample_c_imgs, True, one_image=True)
-data=data.reshape(-1,256)
-contexts=contexts.reshape(-1,256)
-val_split= 10*30
-# data,valx = data[val_split:].reshape(-1,256),data[:val_split].reshape(-1,256)
-# contexts,valc = contexts[val_split:].reshape(-1,256),contexts[:val_split].reshape(-1,256)
+print(data.shape)
+contexts=contexts.reshape(1500*100,64,16,16)
+data=data.reshape(-1,256)[:1500*100]
 model = GatedPixelCNN(args.n_embeddings, args.img_dim**2, args.n_layers, args.conditional).to(device)
 model.train()
 criterion = nn.CrossEntropyLoss().cuda()
@@ -73,12 +67,7 @@ if args.loadpth_vq is not '':
     vae.eval()
     sample_c=vae(sample_c_imgs,latent_only=True).detach().cpu().numpy().squeeze().reshape(40,-1)
 
-# _, x_hat, _ = vae(sample_c_imgs)
-# save_image(x_hat,'./results/samples.png',nrow=10)
-# import ipdb; ipdb.set_trace()
-# _,x_hat, _ = vae(min_encoding_indices=np.array(contexts[:30]))
-# save_image(x_hat,'./results/samples_%d.png'%epoch,nrow=10)
-
+# 
 if args.loadpth_pcnn is not '':
     model.load_state_dict(torch.load(args.loadpth_pcnn))
     print("PCNN Loaded")
@@ -86,21 +75,21 @@ if args.loadpth_pcnn is not '':
 n_trajs = len(data)
 n_batch = int(n_trajs / args.batch_size)
 
-# n_trajs_t = len(valx)
-# n_batch_t = int(n_trajs_t / args.batch_size)
-
+# 
 """
 train, test, and log
 """
 
 def train(epoch):
     train_loss = []
+    log_interval=min(args.log_interval,n_batch-2)
+    sample_interval=min(args.sample_interval,n_batch-2)
     for it in range(n_batch):
 
-        start_time = time.time()
         idx = np.random.choice(n_trajs, size=args.batch_size)
         x = from_numpy_to_var(data[idx].reshape(args.batch_size,img_dim,img_dim),dtype='long').long().cuda()
-        c = from_numpy_to_var(contexts[idx].reshape(args.batch_size,img_dim,img_dim),dtype='long').long().cuda()
+        c = from_numpy_to_var(contexts[idx].reshape(args.batch_size,args.embedding_dim,img_dim,img_dim)).cuda()
+        
         labels = torch.zeros(args.batch_size).long().cuda()
         # Train PixelCNN with images
         logits = model(x, labels,c=c)
@@ -113,20 +102,18 @@ def train(epoch):
 
         train_loss.append(loss.item())
 
-        if it % args.log_interval == 0 and it > 0:
-            print('\tIter: [{}/{} ({:.0f}%)]\tLoss: {} Time: {}'.format(
+        if it % log_interval == 0 and it > 0:
+            print('\tIter: [{}/{} ({:.2f}%)]\tLoss: {}'.format(
                 it,n_batch ,
                 it / n_batch,
-                np.asarray(train_loss)[-args.log_interval:].mean(0),
-                time.time() - start_time
+                np.asarray(train_loss)[-log_interval:].mean(0)
             ))
             log_value('tr_loss', loss.item(), it + n_batch*epoch)
-        if it % args.sample_interval == 0 and it > 0: 
+        if it % sample_interval == 0 and it > 0: 
             generate_samples(epoch)
 
 
 def test(epoch):
-    start_time = time.time()
     val_loss = []
     with torch.no_grad():
         for it in range(n_batch_t):
@@ -143,10 +130,7 @@ def test(epoch):
             val_loss.append(loss.item())
 
     avval=np.asarray(val_loss).mean(0)
-    print('Validation Completed!\tLoss: {} Time: {}'.format(
-        avval,
-        time.time() - start_time
-    ))
+    print('Validation Completed!\tLoss: {}'.format(avval))
     log_value('val_loss', avval.item(), n_batch_t*epoch)
 
     return np.asarray(val_loss).mean(0)
@@ -179,13 +163,13 @@ for epoch in range(0, args.epochs):
 
     print("\n######### Epoch {}:".format(epoch))
     train(epoch)
-    cur_loss = test(epoch)
+    # cur_loss = test(epoch)
 
-    if cur_loss <= BEST_LOSS:
-        BEST_LOSS = cur_loss
-        LAST_SAVED = epoch
+    # if cur_loss <= BEST_LOSS:
+    #     BEST_LOSS = cur_loss
+    #     LAST_SAVED = epoch
 
-        print("Saving model!")
-        torch.save(model.state_dict(), 'results/bco_pixelcnn_%s.pth'%args.prefix)
-    else:
-        print("Not saving model! Last saved: {}".format(LAST_SAVED))
+    #     print("Saving model!")
+    #     torch.save(model.state_dict(), 'results/bco_pixelcnn_%s.pth'%args.prefix)
+    # else:
+    #     print("Not saving model! Last saved: {}".format(LAST_SAVED))

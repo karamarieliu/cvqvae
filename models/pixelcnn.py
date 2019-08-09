@@ -69,16 +69,17 @@ class GatedMaskedConv2d(nn.Module):
         self.horiz_stack.weight.data[:, :, :, -1].zero_()  # Mask final column
 
     def forward(self, x_v, x_h, h, c):
-        if c is not None:
-            #tmux 0
-            s = self.m(c)
-            con_fv = self.con_f(s)
-            con_gv = self.con_g(s)
-            con_fh = self.vert_to_horiz_c(con_fv)
-            con_gh = self.vert_to_horiz_c(con_gv)
+        # if c is not None:
+        #     #tmux 0
+        #     s = self.m(c)
+        #     con_fv = self.con_f(s)
+        #     con_gv = self.con_g(s)
+        #     con_fh = self.vert_to_horiz_c(con_fv)
+        #     con_gh = self.vert_to_horiz_c(con_gv)
 
-        else:
-            con_f,con_g = None,None
+        # else:
+        con_fv,con_gv = None,None
+        con_fh,con_gh = None,None
         if self.mask_type == 'A':
             self.make_causal()
         
@@ -124,25 +125,32 @@ class GatedPixelCNN(nn.Module):
 
         # Add the output layer
         self.output_conv = nn.Sequential(
-            nn.Conv2d(dim, 1024, 1),
-            nn.ReLU(True),
-            nn.Conv2d(1024, 512, 1),            
+            nn.Conv2d(dim, 512, 1),
+            # nn.ReLU(True),
+            # nn.Conv2d(1024, 512, 1),            
             nn.ReLU(True),
             nn.Conv2d(512, input_dim, 1)            
 
         )
 
         self.apply(weights_init)
+        self.con_to_latent = nn.Sequential(
+            nn.Conv2d(64, 32, 1),           
+            nn.ReLU(True),
+            nn.Conv2d(32, 1, 1)            
 
+        )
     def forward(self, x, label, c):
         shp = x.size() + (-1, )
         x = self.embedding(x.view(-1)).view(shp)  # (B, H, W, C)
         x = x.permute(0, 3, 1, 2)  # (B, C, W, H)        
         if self.conditional:
-            con = self.embedding(c.view(-1)).view(shp)  # (B, H, W, C)
-            con = con.permute(0, 3, 1, 2)  # (B, C, W, H)
+            con=self.con_to_latent(c).long()
+            # con = self.embedding(c.view(-1)).view(shp)  # (B, H, W, C)
+            # con = con.permute(0, 3, 1, 2)  # (B, C, W, H)
         else:
             con=None
+
         x_v, x_h = (x, x)
         for i, layer in enumerate(self.layers):
             x_v, x_h = layer(x_v, x_h, label, c=con)
