@@ -22,9 +22,9 @@ class GatedActivation(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, x):
+    def forward(self, x, con_f, con_g):
         x, y = x.chunk(2, dim=1)
-        return F.tanh(x) * F.sigmoid(y)
+        return F.tanh(x+con_f) * F.sigmoid(y+con_g)
 
 
 class GatedMaskedConv2d(nn.Module):
@@ -33,10 +33,6 @@ class GatedMaskedConv2d(nn.Module):
         assert kernel % 2 == 1, print("Kernel size must be odd")
         self.mask_type = mask_type
         self.residual = residual
-
-        self.class_cond_embedding = nn.Embedding(
-            n_classes, 2 * dim
-        )
 
         kernel_shp = (kernel // 2 + 1, kernel)  # (ceil(n/2), n)
         padding_shp = (kernel // 2, kernel // 2)
@@ -56,26 +52,30 @@ class GatedMaskedConv2d(nn.Module):
 
         self.horiz_resid = nn.Conv2d(dim, dim, 1)
 
+        self.con_f = nn.Conv2d(dim, dim, 1)
+        self.con_g = nn.Conv2d(dim, dim, 1)
+
         self.gate = GatedActivation()
 
     def make_causal(self):
         self.vert_stack.weight.data[:, :, -1].zero_()  # Mask final row
         self.horiz_stack.weight.data[:, :, :, -1].zero_()  # Mask final column
 
-    def forward(self, x_v, x_h, h):
+    def forward(self, x_v, x_h, con):
+        con_f = self.con_f(con)
+        con_g = self.con_g(con)
         if self.mask_type == 'A':
             self.make_causal()
 
-        h = self.class_cond_embedding(h)
         h_vert = self.vert_stack(x_v)
         h_vert = h_vert[:, :, :x_v.size(-1), :]
-        out_v = self.gate(h_vert + h[:, :, None, None])
+        out_v = self.gate(h_vert, con_f, con_g)
 
         h_horiz = self.horiz_stack(x_h)
         h_horiz = h_horiz[:, :, :, :x_h.size(-2)]
         v2h = self.vert_to_horiz(h_vert)
 
-        out = self.gate(v2h + h_horiz + h[:, :, None, None])
+        out = self.gate(v2h + h_horiz, con_f, con_g)
         if self.residual:
             out_h = self.horiz_resid(out) + x_h
         else:
@@ -115,18 +115,20 @@ class GatedPixelCNN(nn.Module):
 
         self.apply(weights_init)
 
-    def forward(self, x, label):
+    def forward(self, x, con):
         shp = x.size() + (-1, )
         x = self.embedding(x.view(-1)).view(shp)  # (B, H, W, C)
-        x = x.permute(0, 3, 1, 2)  # (B, C, W, H)
+        x = x.permute(0, 3, 1, 2)  # (B, C, W, H)        
+        con = self.embedding(con.view(-1)).view(shp)  # (B, H, W, C)
+        con = con.permute(0, 3, 1, 2)  # (B, C, W, H)
 
         x_v, x_h = (x, x)
         for i, layer in enumerate(self.layers):
-            x_v, x_h = layer(x_v, x_h, label)
+            x_v, x_h = layer(x_v, x_h, con)
 
         return self.output_conv(x_h)
 
-    def generate(self, label, shape=(8, 8), batch_size=64):
+    def generate(self, con, shape=(8, 8), batch_size=64):
         param = next(self.parameters())
         x = torch.zeros(
             (batch_size, *shape),
@@ -135,7 +137,7 @@ class GatedPixelCNN(nn.Module):
 
         for i in range(shape[0]):
             for j in range(shape[1]):
-                logits = self.forward(x, label)
+                logits = self.forward(x, con)
                 probs = F.softmax(logits[:, :, i, j], -1)
                 x.data[:, i, j].copy_(
                     probs.multinomial(1).squeeze().data
