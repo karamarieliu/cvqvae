@@ -58,9 +58,9 @@ class GatedMaskedConv2d(nn.Module):
 
         self.horiz_resid = nn.Conv2d(dim, dim, 1)
 
-        self.con_f = nn.Conv2d(2*dim, dim, 1)
-        self.con_g = nn.Conv2d(2*dim, dim, 1)
-        self.m = nn.Conv2d(dim, 2*dim, 1)
+        self.con_f = nn.Conv2d(dim, dim, 1)
+        self.con_g = nn.Conv2d(dim, dim, 1)
+
 
         self.gate = GatedActivation()
 
@@ -70,12 +70,10 @@ class GatedMaskedConv2d(nn.Module):
 
     def forward(self, x_v, x_h, h, c):
         if c is not None:
-            #tmux 0
-            s = self.m(c)
-            con_fv = self.con_f(s)
-            con_gv = self.con_g(s)
-            con_fh = self.vert_to_horiz_c(con_fv)
-            con_gh = self.vert_to_horiz_c(con_gv)
+            con_f = self.con_f(c)
+            con_g = self.con_g(c)
+            # con_fh = self.vert_to_horiz_c(con_fv)
+            # con_gh = self.vert_to_horiz_c(con_gv)
 
         else:
             con_fv,con_gv = None,None
@@ -84,15 +82,16 @@ class GatedMaskedConv2d(nn.Module):
             self.make_causal()
         
         h = self.class_cond_embedding(h)
+
         h_vert = self.vert_stack(x_v)
         h_vert = h_vert[:, :, :x_v.size(-1), :]
-        out_v = self.gate(h_vert +  h[:, :, None, None],con_fv, con_gv)
+        out_v = self.gate(h_vert +  h[:, :, None, None], con_f, con_g)
 
         h_horiz = self.horiz_stack(x_h)
         h_horiz = h_horiz[:, :, :, :x_h.size(-2)]
         v2h = self.vert_to_horiz(h_vert)
 
-        out = self.gate(v2h + h_horiz + h[:, :, None, None], con_fh, con_gh)
+        out = self.gate(v2h + h_horiz + h[:, :, None, None], con_f, con_g)
         if self.residual:
             out_h = self.horiz_resid(out) + x_h
         else:
@@ -125,9 +124,7 @@ class GatedPixelCNN(nn.Module):
 
         # Add the output layer
         self.output_conv = nn.Sequential(
-            nn.Conv2d(dim, 512, 1),
-            # nn.ReLU(True),
-            # nn.Conv2d(1024, 512, 1),            
+            nn.Conv2d(dim, 512, 1),         
             nn.ReLU(True),
             nn.Conv2d(512, input_dim, 1)            
 
@@ -140,6 +137,8 @@ class GatedPixelCNN(nn.Module):
             nn.Conv2d(32, 1, 1)            
 
         )
+
+
     def forward(self, x, label, c):
         shp = x.size() + (-1, )
         x = self.embedding(x.view(-1)).view(shp)  # (B, H, W, C)

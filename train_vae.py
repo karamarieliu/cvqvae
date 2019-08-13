@@ -3,18 +3,19 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import argparse
-import utils
+from utils import *
 from models.vqvae import VQVAE
 from torch.autograd import Variable
 from torchvision.utils import save_image
 import os
+
 parser = argparse.ArgumentParser()
 
 
 """
 Hyperparameters
 """
-timestamp = utils.readable_timestamp()
+timestamp = readable_timestamp()
 
 parser.add_argument("--batch_size", type=int, default=32)
 parser.add_argument("--n_updates", type=int, default=5000)
@@ -27,7 +28,7 @@ parser.add_argument("--beta", type=float, default=.25)
 parser.add_argument("--learning_rate", type=float, default=3e-4)
 parser.add_argument("--log_interval", type=int, default=1000)
 parser.add_argument("--dataset",  type=str, default='CIFAR10')
-parser.add_argument("--loadpth",  type=str, default='./results/vqvae_data_tst2.pth')
+parser.add_argument("--loadpth",  type=str, default='')
 
 # whether or not to save model
 parser.add_argument("--filename",  type=str, default=timestamp)
@@ -71,7 +72,8 @@ results = {
 data1 = np.load(data_dir+"/bcov5_0.npy")
 data2 = np.load(data_dir+"/bcov5_1.npy")
 data3 = np.load(data_dir+"/bcov5_2.npy")
-data = np.concatenate((data1,data2,data3),axis=0)
+data4 = np.load(data_dir+"/bcov5_3.npy")
+data = np.concatenate((data1,data2,data3,data4),axis=0)
 # d=data[:,:,0]
 # newnpy=[]
 # n_trajs,traj_len = d.shape
@@ -79,7 +81,7 @@ data = np.concatenate((data1,data2,data3),axis=0)
 #     img=d[i,0][:,:,:3]/255
 #     newnpy.append(img)
 
-x_train_var = 0.02694245912284954
+x_train_var =0.026937801369924044
 n_trajs = len(data)
 data_size = sum([len(data[i]) - 1 for i in range(n_trajs)])
 n_batch = int(data_size / args.batch_size)
@@ -92,11 +94,11 @@ def train():
         for it in range(n_batch):
             idx = np.random.choice(n_trajs, size=args.batch_size)
             t = np.array([np.random.randint(len(data[i]) - 1) for i in idx])            
-            x,_ = get_torch_images_from_numpy(data[idx, t], True ,normalize=True)
-            x = x.to(device)
+            x,c = get_torch_images_from_numpy(data[idx, t], True ,normalize=True)
+            x,c = x.to(device),c.to(device)
             optimizer.zero_grad()
 
-            embedding_loss, x_hat, perplexity = model(x)
+            embedding_loss, x_hat, perplexity = model(torch.cat((x,c),dim=1))
             recon_loss = torch.mean((x_hat - x)**2) / x_train_var
             loss = recon_loss + embedding_loss
 
@@ -114,7 +116,7 @@ def train():
                 """
                 if args.save:
                     hyperparameters = args.__dict__
-                    utils.save_model_and_results(
+                    save_model_and_results(
                         model, results, hyperparameters, args.filename)
 
                 print('Update #', i, 'Recon Error:',
