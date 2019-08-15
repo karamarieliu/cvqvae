@@ -31,34 +31,49 @@ parser.add_argument("--conditional", default=True)
 parser.add_argument("--batch_size", type=int, default=32)
 parser.add_argument("--epochs", type=int, default=100)
 parser.add_argument("--log_interval", type=int, default=500)
-parser.add_argument("--sample_interval", type=int, default=2000)
+parser.add_argument("--sample_interval", type=int, default=5000)
 parser.add_argument("--img_dim", type=int, default=16)
+parser.add_argument("--c_one_hot", type=int, default=0,
+    help="0:just use z_c; 1:just use 1hot(z_c); 2: use [1hot(z_c), z_c]); 3: z_x=[z_x, z_c]")
+parser.add_argument("--x_one_hot", type=int, default=0,
+    help="0:just use z_x; 1:just use 1hot(z_x); 2: unsupported; 3: z_x=[z_x, z_c]")
 parser.add_argument("--input_dim", type=int, default=1,
     help='1 for grayscale 3 for rgb')
 parser.add_argument("--n_embeddings", type=int, default=512,
     help='number of embeddings from VQ VAE')
-parser.add_argument("--n_layers", type=int, default=8)
+parser.add_argument("--n_cres_layers", type=int, default=3,
+    help='number of layers for C-->latent restnet')
+parser.add_argument("--n_layers", type=int, default=20)
 parser.add_argument("--learning_rate", type=float, default=1e-3)
-parser.add_argument("--loadpth_vq",  type=str, default='./results/vqvae_data_4files_1.pth')
+parser.add_argument("--loadpth_vq",  type=str, default='')
 parser.add_argument("--loadpth_pcnn",  type=str, default='')
 parser.add_argument("--prefix",  type=str, default='')
+parser.add_argument("--data",  type=str, default='bco')
 args = parser.parse_args()
-
+print(args)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # configure('./results/var_log', flush_secs=5)
-img_dim=args.img_dim
-data = np.load("./data/bco_xlatents.npy")
-data,val=data[30*10:],data[:30*10]
-context = np.load("./data/bco_clatents.npy").squeeze()
-context,valcon=context[30*10:],context[:30*10]
-sample_c_imgs = np.load("./data/bco_tstcon_40.npy")
-sample_c_imgs = get_torch_images_from_numpy(sample_c_imgs, True, one_image=True)
+if args.data=='bo':
+    split=50*3
+    args.loadpth_vq='./results/vqvae_data_bo.pth'
+else:
+    split=30*10
+    args.loadpth_vq='./results/vqvae_data_4files_1.pth'
+    sample_c_imgs = np.load("./data/bco_tstcon_40.npy")
+    sample_c_imgs = get_torch_images_from_numpy(sample_c_imgs, True, one_image=True)
+
+data = np.load("./data/%s_xlatents.npy"%args.data)
+data,val=data[split:],data[:split]
 data,val=data.reshape(-1,256),val.reshape(-1,256)
+context = np.load("./data/%s_clatents.npy"%args.data).squeeze()
+context,valcon=context[split:],context[:split]
 context,valcon=context.reshape(-1,256),context.reshape(-1,256)
 n_trajs, length = data.shape[:2]
+img_dim=args.img_dim
 
 model = GatedPixelCNN_Snail(n_embeddings=args.n_embeddings, imgximg=args.img_dim**2, 
-    n_layers=args.n_layers, conditional=args.conditional).to(device)
+    n_layers=args.n_layers, conditional=args.conditional,
+    x_one_hot=args.x_one_hot,c_one_hot=args.c_one_hot, n_cond_res_block=args.n_cres_layers).to(device)
 model.train()
 criterion = nn.CrossEntropyLoss().cuda()
 opt = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
@@ -69,7 +84,8 @@ if args.loadpth_vq is not '':
     vae.load_state_dict(torch.load(args.loadpth_vq)['model'])
     print("VQ Loaded")
     vae.eval()
-    sample_c=vae(sample_c_imgs,latent_only=True).detach().cpu().numpy().reshape(-1,length).squeeze()
+    if args.data=='bco':
+        sample_c=vae(sample_c_imgs,latent_only=True).detach().cpu().numpy().reshape(-1,length).squeeze()
 
 # 
 if args.loadpth_pcnn is not '':
@@ -155,27 +171,38 @@ def test(epoch):
 
 
 def generate_samples(epoch):
-    n_samples, ctxts_sampled=10,1
-    labels = torch.zeros(n_samples).long().cuda()
+    with torch.no_grad():
+        n_samples, ctxts_sampled=10,1
+        labels = torch.zeros(n_samples).long().cuda()
 
-    #Test samples
-    idx = np.random.choice(sample_c.shape[0], size=ctxts_sampled)
-    con = from_numpy_to_var(sample_c[idx]).repeat(n_samples,1,1,1).reshape(n_samples,img_dim,img_dim).long().cuda()
-    x_tilde = model.generate(labels, c=con, shape=(img_dim,img_dim), batch_size=n_samples)
+        #Test samples
+        if args.data=='bco':
+            idx = np.random.choice(sample_c.shape[0], size=ctxts_sampled)
+            con = from_numpy_to_var(sample_c[idx]).repeat(n_samples,1,1,1).reshape(n_samples,img_dim,img_dim).long().cuda()
+            x_tilde = model.generate(labels, c=con, shape=(img_dim,img_dim), batch_size=n_samples)
 
-    if args.loadpth_vq is not '':
-        _, x_hat, _ = vae(min_encoding_indices=x_tilde)
-        save_image(torch.cat((sample_c_imgs[idx],x_hat),dim=0),'./results/%s_testsamples_%d.png'%(args.prefix,epoch),nrow=n_samples+1)
-    
-    #Training samples 
-    idx = np.random.choice(n_trajs, size=n_samples)
-    c = from_numpy_to_var(context[idx].reshape(n_samples,img_dim,img_dim)).long().cuda()
-    x_tilde = model.generate(labels, c=c, shape=(img_dim,img_dim), batch_size=n_samples)
-    
-    if args.loadpth_vq is not '':
-        _,x_hat_con,_=vae(min_encoding_indices=from_numpy_to_var(context[idx]).long())
-        _, x_hat, _ = vae(min_encoding_indices=x_tilde)
-        save_image(torch.cat((x_hat_con,x_hat),dim=0),'./results/%s_trsamples_%d.png'%(args.prefix,epoch),nrow=n_samples)
+            if args.loadpth_vq is not '':
+                _, x_hat, _ = vae(min_encoding_indices=x_tilde)
+                save_image(torch.cat((sample_c_imgs[idx],x_hat),dim=0),'./results/%s_testsamples_%d.png'%(args.prefix,epoch),nrow=n_samples+1)
+        elif args.data=='bo':
+            idx = np.random.choice(n_trajs_t, size=n_samples)
+            c = from_numpy_to_var(valcon[idx].reshape(n_samples,img_dim,img_dim)).long().cuda()
+            x_tilde = model.generate(labels, c=c, shape=(img_dim,img_dim), batch_size=n_samples)
+            
+            if args.loadpth_vq is not '':
+                _,x_hat_con,_=vae(min_encoding_indices=from_numpy_to_var(valcon[idx]).long())
+                _, x_hat, _ = vae(min_encoding_indices=x_tilde)
+                save_image(torch.cat((x_hat_con,x_hat),dim=0),'./results/%s_valsamples_%d.png'%(args.prefix,epoch),nrow=n_samples)
+
+        #Training samples 
+        idx = np.random.choice(n_trajs, size=n_samples)
+        c = from_numpy_to_var(context[idx].reshape(n_samples,img_dim,img_dim)).long().cuda()
+        x_tilde = model.generate(labels, c=c, shape=(img_dim,img_dim), batch_size=n_samples)
+        
+        if args.loadpth_vq is not '':
+            _,x_hat_con,_=vae(min_encoding_indices=from_numpy_to_var(context[idx]).long())
+            _, x_hat, _ = vae(min_encoding_indices=x_tilde)
+            save_image(torch.cat((x_hat_con,x_hat),dim=0),'./results/%s_trsamples_%d.png'%(args.prefix,epoch),nrow=n_samples)
 
 BEST_LOSS = 999
 LAST_SAVED = -1

@@ -19,8 +19,9 @@ parser.add_argument("--n_residual_layers", type=int, default=2)
 parser.add_argument("--embedding_dim", type=int, default=64)
 parser.add_argument("--n_embeddings", type=int, default=512)
 parser.add_argument("--beta", type=float, default=.25)
-parser.add_argument("--loadpth",  type=str, default='./results/vqvae_data_4files_1.pth')
+parser.add_argument("--loadpth",  type=str, default='./results/vqvae_data_bo.pth')
 parser.add_argument("--data_dir",  type=str, default='/home/karam/Downloads/bco/')
+parser.add_argument("--data",  type=str, default='bco')
 args = parser.parse_args()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -36,11 +37,15 @@ print("Loaded model")
 #Load data
 save_dir=os.getcwd() + '/data'
 data_dir = args.data_dir
-data1 = np.load(data_dir+"/bcov5_0.npy")
-data2 = np.load(data_dir+"/bcov5_1.npy")
-data3 = np.load(data_dir+"/bcov5_2.npy")
-data4 = np.load(data_dir+"/bcov5_3.npy")
-data = np.concatenate((data1,data2,data3,data4),axis=0)
+if args.data=='bco':
+    data1 = np.load(data_dir+"/bcov5_0.npy")
+    data2 = np.load(data_dir+"/bcov5_1.npy")
+    data3 = np.load(data_dir+"/bcov5_2.npy")
+    data4 = np.load(data_dir+"/bcov5_3.npy")
+    data = np.concatenate((data1,data2,data3,data4),axis=0)
+elif args.data=='bo':
+    data = np.load(data_dir+"/bo-150-50-20.npy",allow_pickle=True)
+
 n_trajs, length = data.shape[:2]
 print("Loaded data")
 
@@ -54,8 +59,8 @@ with torch.no_grad():
         latents.append(encoding_indices_x.detach().cpu().numpy().squeeze().reshape(length,-1))
         ctxts.append(encoding_indices_c.detach().cpu().numpy().squeeze().reshape(length,-1))
 
-np.save(save_dir+'/bco1_xlatents.npy',latents)
-np.save(save_dir+'/bco1_clatents.npy',ctxts)
+np.save(save_dir+'/%s_xlatents.npy'%args.data,latents)
+np.save(save_dir+'/%s_clatents.npy'%args.data,ctxts)
 print("Generated image indices with shape ", np.array(latents).shape)
 
 
