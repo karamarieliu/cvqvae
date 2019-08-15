@@ -197,14 +197,18 @@ class CausalConv2d(nn.Module):
         return out
 
 class GatedMaskedConv2d(nn.Module):
-    def __init__(self, mask_type, imgximg, kernel, residual=True, n_classes=10):
+    def __init__(self, mask_type, imgximg, kernel, residual=True, n_classes=10, c_one_hot=2):
         super().__init__()
         assert kernel % 2 == 1, print("Kernel size must be odd")
         self.mask_type = mask_type
         self.residual = residual
-        dim = imgximg
-        # self.class_cond_embedding = nn.Embedding(
+        if c_one_hot==2:
+            cdim=2*imgximg+ 1 #one hot encoding + 1 for indices
+        else:
+            cdim=imgximg  
+                    # self.class_cond_embedding = nn.Embedding(
         #     n_classes, 2 * dim)
+        dim=imgximg
 
         kernel_shp = (kernel // 2 + 1, kernel)  # (ceil(n/2), n)
         padding_shp = (kernel // 2, kernel // 2)
@@ -225,8 +229,8 @@ class GatedMaskedConv2d(nn.Module):
 
         self.horiz_resid = nn.Conv2d(dim, dim, 1)
 
-        self.con_f = nn.Conv2d(dim, dim, 1)
-        self.con_g = nn.Conv2d(dim, dim, 1)
+        self.con_f = nn.Conv2d(cdim, dim, 1)
+        self.con_g = nn.Conv2d(cdim, dim, 1)
 
 
         self.gate = GatedActivation()
@@ -335,9 +339,12 @@ class GatedPixelCNN(nn.Module):
 
 
 class GatedPixelCNN_Snail(nn.Module):
-    def __init__(self, n_embeddings, imgximg, n_layers, conditional=True, n_cond_res_block=3):
+    def __init__(self, n_embeddings, imgximg, n_layers, conditional=True, n_cond_res_block=3, c_one_hot=2):
         super().__init__()
-        self.dim = imgximg
+        if c_one_hot==2:
+            self.dim=2*imgximg+ 1 #one hot encoding + 1 for indices
+        else:
+            self.dim=imgximg        
         self.conditional=conditional
         # Create embedding layer to embed input
         self.embedding = nn.Embedding(n_embeddings, imgximg)
@@ -353,7 +360,7 @@ class GatedPixelCNN_Snail(nn.Module):
             residual = False if i == 0 else True
 
             self.layers.append(
-                GatedMaskedConv2d(mask_type, imgximg, kernel, residual)
+                GatedMaskedConv2d(mask_type, imgximg, kernel, residual,c_one_hot=c_one_hot)
             )
 
         # Add the output layer
@@ -365,30 +372,43 @@ class GatedPixelCNN_Snail(nn.Module):
             nn.Conv2d(512, n_embeddings, 1)  
             )          
 
+
         if n_cond_res_block > 0:
             self.cond_resnet = CondResNet(
-                imgximg, imgximg, cond_res_kernel, n_cond_res_block
+                self.dim, self.dim, cond_res_kernel, n_cond_res_block
             )
 
         self.apply(weights_init)
 
 
 
-    def forward(self, x, c, one_hot=False):  
+    def forward(self, x, c, c_one_hot=2, x_one_hot=0):  
+        # one hot: 0 = don't use at all
+        # 1: use just one hot
+        # 2: cat c w one hot
         shp = x.size() + (-1, )
 
-        if one_hot:
+        if x_one_hot==1:
             x = F.one_hot(x, self.n_class).permute(0, 3, 1, 2).float()
+        elif x_one_hot==2:
+            print(1/0)
         else:
             x = self.embedding(x.view(-1)).view(shp)  # (B, H, W, C)
             x = x.permute(0, 3, 1, 2) # (B, C, W, H)     
 
         if c is not None:
-            if one_hot:
+            if c_one_hot==1:
                 c = F.one_hot(c, self.n_class)
-            else: 
+                c = c.permute(0, 3, 1, 2)
+            elif c_one_hot==2:
+                c1 = F.one_hot(c, self.n_class)
+                c1 = c1.permute(0, 3, 1, 2)
+                c2 = c[:,:,:,None]
+                c2 = c2.permute(0, 3, 1, 2)
+                c=torch.cat((c1,c2),dim=1)
+            else:
                 c = self.embedding(c.view(-1)).view(shp)  # (B, H, W, C)
-            c = c.permute(0, 3, 1, 2)
+                c = c.permute(0, 3, 1, 2)
             c = self.cond_resnet(c.float())
         x_v, x_h = (x, x)
         for i, layer in enumerate(self.layers):
