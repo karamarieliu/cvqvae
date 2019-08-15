@@ -13,7 +13,7 @@ import os
 # from tensorboard_logger import configure
 from utils import *
 current_dir = sys.path.append(os.getcwd())
-from models.pixelcnn import GatedPixelCNN, GatedPixelCNN_Snail
+from models.pixelcnn import GatedPixelCNN
 import utils
 from models.vqvae import VQVAE
 
@@ -31,7 +31,7 @@ parser.add_argument("--conditional", default=True)
 parser.add_argument("--batch_size", type=int, default=32)
 parser.add_argument("--epochs", type=int, default=100)
 parser.add_argument("--log_interval", type=int, default=500)
-parser.add_argument("--sample_interval", type=int, default=5000)
+parser.add_argument("--sample_interval", type=int, default=4000)
 parser.add_argument("--img_dim", type=int, default=16)
 parser.add_argument("--c_one_hot", type=int, default=0,
     help="0:just use z_c; 1:just use 1hot(z_c); 2: use [1hot(z_c), z_c]); 3: z_x=[z_x, z_c]")
@@ -48,7 +48,7 @@ parser.add_argument("--learning_rate", type=float, default=1e-3)
 parser.add_argument("--loadpth_vq",  type=str, default='')
 parser.add_argument("--loadpth_pcnn",  type=str, default='')
 parser.add_argument("--prefix",  type=str, default='')
-parser.add_argument("--data",  type=str, default='bco')
+parser.add_argument("--data",  type=str, default='bo')
 args = parser.parse_args()
 print(args)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -62,6 +62,8 @@ else:
     sample_c_imgs = np.load("./data/bco_tstcon_40.npy")
     sample_c_imgs = get_torch_images_from_numpy(sample_c_imgs, True, one_image=True)
 
+if args.c_one_hot==3:
+    args.conditional=False
 data = np.load("./data/%s_xlatents.npy"%args.data)
 data,val=data[split:],data[:split]
 data,val=data.reshape(-1,256),val.reshape(-1,256)
@@ -71,7 +73,7 @@ context,valcon=context.reshape(-1,256),context.reshape(-1,256)
 n_trajs, length = data.shape[:2]
 img_dim=args.img_dim
 
-model = GatedPixelCNN_Snail(n_embeddings=args.n_embeddings, imgximg=args.img_dim**2, 
+model = GatedPixelCNN(n_embeddings=args.n_embeddings, imgximg=args.img_dim**2, 
     n_layers=args.n_layers, conditional=args.conditional,
     x_one_hot=args.x_one_hot,c_one_hot=args.c_one_hot, n_cond_res_block=args.n_cres_layers).to(device)
 model.train()
